@@ -29,6 +29,7 @@ import {
   agentRunsTotal,
   agentToolCallsTotal,
   agentLlmTokensTotal,
+  agentLlmErrorTotal,
 } from "../shared/metrics.ts";
 import {
   comparePharmacyPrices,
@@ -233,19 +234,17 @@ async function runAgent(task: string) {
       });
     } catch (llmErr: any) {
       logger.error({ err: llmErr.message, iteration }, "LLM API error");
-      if (toolCalls.length > 0 && !finalResponse) {
-        finalResponse = toolCalls.map(tc => {
-          if (tc.result?.error) return `${tc.tool}: ${tc.result.error}`;
-          if (tc.tool === "compare_pharmacy_prices" && (tc.result as any)?.cheapest) return `${(tc.result as any).drug}: cheapest at $${(tc.result as any).cheapest.price} (${(tc.result as any).cheapest.pharmacyName}), save $${(tc.result as any).potentialSavings}/mo`;
-          if (tc.tool === "audit_medical_bill" && (tc.result as any)?.totalOvercharge) return `Bill audit: $${(tc.result as any).totalOvercharge} in overcharges found (${(tc.result as any).errorCount} errors)`;
-          if (tc.tool === "check_drug_interactions" && (tc.result as any)?.summary) return (tc.result as any).summary;
-          if (tc.tool === "pay_for_medication" && (tc.result as any)?.success) return `Paid $${(tc.result as any).transaction.amount} for ${(tc.result as any).transaction.description}`;
-          if (tc.tool === "pay_bill" && (tc.result as any)?.success) return `Paid bill: $${(tc.result as any).transaction.amount}`;
-          return `${tc.tool}: completed`;
-        }).join("\n");
-      } else if (!finalResponse) {
-        finalResponse = `LLM error: ${llmErr.message}`;
-      }
+      agentLlmErrorTotal.inc();
+      finalResponse = JSON.stringify({
+        status: "llm_error",
+        toolCallsCompleted: toolCalls.length,
+        message: `LLM API error: ${llmErr.message}. Agent run was interrupted — not all tool calls may have completed.`,
+        toolCalls: toolCalls.map(tc => ({
+          tool: tc.tool,
+          input: tc.input,
+          result: tc.result,
+        })),
+      });
       break;
     }
 
